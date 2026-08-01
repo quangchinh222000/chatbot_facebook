@@ -1,11 +1,34 @@
+# --- Bí mật: tuyệt đối không đẩy lên git ---
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*
+*secret*
+
+# --- Tài liệu nội bộ: giữ trên máy, không đẩy lên git ---
+# Chứa spec thiết kế, đánh giá hệ thống và dữ liệu giá/khoá học thật.
+docs/
+.tmp-doc-review/
+
+# --- Test: không đẩy lên git (vẫn giữ trên máy để chạy local) ---
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+vitest.config.ts
+playwright.config.ts
+server/fixtures/
+scripts/smoke.ps1
+test-results/
+playwright-report/
+coverage/
+__snapshots__/
+
+# --- Build & phụ thuộc ---
 .next/
 node_modules/
 dist/
-coverage/
-playwright-report/
-test-results/
-.tmp-doc-review/
 data/
 *.log
-
