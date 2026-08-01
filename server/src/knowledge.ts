@@ -159,7 +159,12 @@ export async function searchKnowledge(organizationId: string, searchText: string
      FROM knowledge.chunks c
      JOIN knowledge.document_revisions r ON r.id = c.document_revision_id
      JOIN knowledge.documents d ON d.id = r.document_id
-     WHERE c.organization_id = $1 AND r.status IN ('ready','published') AND d.status <> 'archived'
+     -- Chỉ revision ĐÃ PUBLISH mới được vào runtime (yêu cầu 5.7).
+     -- Trước đây chấp nhận cả 'ready', mà 'ready' do chính job index tự đặt,
+     -- nên nội dung draft đi thẳng vào RAG không cần ai duyệt.
+     WHERE c.organization_id = $1 AND r.status = 'published' AND d.status <> 'archived'
+       AND (r.effective_from IS NULL OR r.effective_from <= now())
+       AND (r.effective_to IS NULL OR r.effective_to > now())
      ORDER BY score DESC, c.created_at DESC
      LIMIT $4`,
     [organizationId, embedding, searchText, Math.min(Math.max(topK, 1), 20)]
@@ -204,8 +209,14 @@ export async function indexDocumentRevision(revisionId: string, correlationId: s
         [row.organization_id, revisionId, row.profile_id, index, content, embedding, JSON.stringify({ token_estimate: Math.ceil(content.length / 4) })]
       );
     }
-    await client.query("UPDATE knowledge.document_revisions SET status = 'ready', updated_at = now() WHERE id = $1", [revisionId]);
-    await client.query("UPDATE knowledge.documents SET status = 'ready' WHERE id = $1", [row.document_id]);
+    // Giữ nguyên trạng thái publish. Bản trước luôn ghi 'ready', nên hành động
+    // publish của người dùng bị chính job index xoá mất ngay sau đó.
+    const indexedStatus = row.revision_status === "published" ? "published" : "ready";
+    await client.query("UPDATE knowledge.document_revisions SET status = $2, updated_at = now() WHERE id = $1", [revisionId, indexedStatus]);
+    await client.query(
+      "UPDATE knowledge.documents SET status = $2 WHERE id = $1 AND status <> 'published'",
+      [row.document_id, indexedStatus]
+    );
     await emitEvent(client, {
       eventType: "knowledge.index.completed",
       organizationId: row.organization_id,

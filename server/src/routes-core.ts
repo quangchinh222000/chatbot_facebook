@@ -2,9 +2,10 @@ import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { clearSessionCookie, createSession, loginWithPassword, requirePermission, setSessionCookie } from "./auth.js";
-import { config } from "./config.js";
+import { config, runtimeMode } from "./config.js";
 import { pool, query, withTransaction } from "./db.js";
 import { eventBus } from "./events.js";
+import { collectHealth } from "./health.js";
 import { createHttpError, sendData } from "./http.js";
 import { getPricingQuote } from "./knowledge.js";
 import { enqueueJob, emitEvent, publishOutbox, writeAudit } from "./platform.js";
@@ -62,16 +63,26 @@ async function enqueueRawWebhook(input: {
 }
 
 export async function registerCoreRoutes(app: FastifyInstance) {
+  /**
+   * Liveness cho Docker healthcheck — phải nhẹ và không phụ thuộc dịch vụ
+   * ngoài, nếu không một MinIO chậm sẽ làm container API bị restart oan.
+   */
   app.get("/api/v1/health", async (request, reply) => {
     const db = await query<{ now: string }>("SELECT now()::text");
     return sendData(request, reply, {
       status: "ok",
       service: "tm-ai-operations-api",
       environment: config.APP_ENV,
+      runtime_mode: runtimeMode,
       database_time: db.rows[0]?.now,
-      demo_mode: config.DEMO_MODE,
-      model_gateway: config.OPENAI_API_KEY ? "openai-compatible" : "local-deterministic"
+      demo_mode: config.DEMO_MODE
     });
+  });
+
+  /** Readiness chi tiết từng thành phần — nguồn dữ liệu cho màn hình System Status. */
+  app.get("/api/v1/health/detailed", async (request, reply) => {
+    requirePermission(request);
+    return sendData(request, reply, await collectHealth());
   });
 
   app.post("/api/v1/auth/login", async (request, reply) => {
@@ -182,11 +193,17 @@ export async function registerCoreRoutes(app: FastifyInstance) {
         n8nDocker: `${dockerBase}/api/v1/webhooks/n8n/${DEMO_CHANNEL_ID}`,
         meta: `${base}/api/v1/webhooks/meta/${DEMO_CHANNEL_ID}`
       },
+      runtimeMode,
+      demoMode: config.DEMO_MODE,
+      // Readiness phản ánh credential thật. Trước đây DEMO_MODE làm n8n hiện
+      // "sẵn sàng" kể cả khi chưa có secret nào — vi phạm yêu cầu 5.16.
       readiness: {
-        n8n: Boolean(config.N8N_WEBHOOK_SECRET) || config.DEMO_MODE,
+        n8n: Boolean(config.N8N_WEBHOOK_SECRET),
         n8nSecretConfigured: Boolean(config.N8N_WEBHOOK_SECRET),
         meta: Boolean(config.META_APP_SECRET && config.META_VERIFY_TOKEN && config.META_PAGE_ACCESS_TOKEN && config.META_PAGE_ID),
-        modelGateway: Boolean(config.OPENAI_API_KEY)
+        modelGateway: Boolean(config.OPENAI_API_KEY),
+        /** Demo Mode chặn mọi lời gọi ra ngoài, kể cả khi credential đã đủ. */
+        outboundEnabled: !config.DEMO_MODE && (config.APP_ENV === "production" || config.APP_ENV === "staging")
       },
       n8n: {
         method: "POST",

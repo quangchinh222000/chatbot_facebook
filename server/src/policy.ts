@@ -1,6 +1,16 @@
+import { stripDiacritics } from "./language.js";
 import type { PolicyDecision } from "./types.js";
 
 const normalize = (value: string) => value.normalize("NFKC").toLocaleLowerCase("vi-VN").replace(/\s+/g, " ").trim();
+
+/**
+ * Khách Việt Nam thường xuyên gõ không dấu ("hoc phi bao nhieu"). Bản trước chỉ
+ * so khớp chuỗi có dấu nên toàn bộ keyword rule trượt — kể cả các rule an toàn
+ * như "chuyển khoản". So khớp song song cả hai dạng.
+ *
+ * Đây chỉ là vá cho keyword rule; classifier bằng model vẫn cần cho 5.11.
+ */
+const flatten = (value: string) => stripDiacritics(normalize(value));
 
 const paymentSignals = ["chuyển khoản", "đã thanh toán", "thanh toán rồi", "payment", "bank transfer"];
 const humanSignals = ["người thật", "tư vấn viên", "chuyên viên", "không muốn nói với bot", "đừng gửi tin tự động", "gặp người", "human", "advisor", "agent", "real person"];
@@ -11,7 +21,8 @@ const priceSignals = ["học phí", "bao nhiêu tiền", "giá", "early bird", "
 
 export function containsAny(text: string, signals: string[]) {
   const normalized = normalize(text);
-  return signals.find((signal) => normalized.includes(signal));
+  const flattened = flatten(text);
+  return signals.find((signal) => normalized.includes(signal) || flattened.includes(stripDiacritics(signal)));
 }
 
 export function containsPhoneNumber(text: string) {
@@ -53,7 +64,7 @@ export function classifyConversation(text: string, currentState: string, hasCour
   if (hasCourse) {
     return { route: "bot", stage: "QNA_COURSE", signals: ["course_match"], confidence: 0.92 };
   }
-  if (/\b(khóa|course|lớp)\b/i.test(text)) {
+  if (/(^|\s)(khoa|course|lop)(\s|$)/i.test(flatten(text))) {
     return { route: "human", stage: "HUMAN", reasonCode: "COURSE_NOT_FOUND", signals: ["unknown_course"], confidence: 0.85 };
   }
   if (currentState === "NEW" && historyCount <= 1) {

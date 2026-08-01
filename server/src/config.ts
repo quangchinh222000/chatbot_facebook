@@ -13,7 +13,14 @@ const schema = z.object({
   ADMIN_PASSWORD: z.string().min(8).default("Admin@123"),
   APP_ENV: z.enum(["development", "staging", "production", "test"]).default("development"),
   WEB_ORIGIN: z.string().url().default("http://localhost:3000"),
-  DEBOUNCE_SECONDS: z.coerce.number().min(0).max(120).default(20),
+  // Chỉ là giá trị dự phòng cuối cùng. Nguồn sự thật là
+  // platform.runtime_settings.debounce_seconds, có thể ghi đè theo channel
+  // qua channel.accounts.policy.debounceSeconds — xem runtime.ts.
+  DEBOUNCE_SECONDS: z.coerce.number().min(0).max(300).default(8),
+  MODEL_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(25_000),
+  WORKER_HEARTBEAT_SECONDS: z.coerce.number().int().min(1).max(120).default(10),
+  /** Ngưỡng coi worker là chết khi không thấy heartbeat. */
+  WORKER_STALE_SECONDS: z.coerce.number().int().min(5).max(600).default(45),
   DEMO_MODE: z.string().default("true").transform((value) => ["1", "true", "yes", "on"].includes(value.toLowerCase())),
   LOG_LEVEL: z.string().default("info"),
   MINIO_ENDPOINT: z.string().default("minio"),
@@ -39,3 +46,42 @@ const schema = z.object({
 
 export const config = schema.parse(process.env);
 export const isProduction = config.APP_ENV === "production";
+
+/**
+ * Chế độ vận hành hiển thị trên UI (yêu cầu 5.16). DEMO_MODE thắng APP_ENV vì
+ * nó là công tắc chặn mọi lời gọi ra bên ngoài.
+ */
+export type RuntimeMode = "DEMO" | "TEST" | "STAGING" | "PRODUCTION";
+
+export const runtimeMode: RuntimeMode = config.DEMO_MODE
+  ? "DEMO"
+  : config.APP_ENV === "production"
+    ? "PRODUCTION"
+    : config.APP_ENV === "staging"
+      ? "STAGING"
+      : "TEST";
+
+/**
+ * Production không được khởi động khi thiếu secret bắt buộc — nếu không, hệ
+ * thống sẽ âm thầm chạy với guard rỗng và tự coi integration là healthy.
+ */
+const PRODUCTION_REQUIRED_SECRETS = [
+  "SESSION_SECRET",
+  "META_APP_SECRET",
+  "META_VERIFY_TOKEN",
+  "META_PAGE_ACCESS_TOKEN",
+  "META_PAGE_ID",
+  "N8N_WEBHOOK_SECRET",
+  "OPENAI_API_KEY"
+] as const;
+
+export function assertProductionSecrets() {
+  if (config.APP_ENV !== "production" || config.DEMO_MODE) return;
+  const missing = PRODUCTION_REQUIRED_SECRETS.filter((key) => !String(config[key] ?? "").trim());
+  if (missing.length) {
+    throw new Error(
+      `Production khởi động thất bại: thiếu ${missing.join(", ")}. ` +
+        "Cấu hình đủ secret hoặc chạy với DEMO_MODE=true."
+    );
+  }
+}

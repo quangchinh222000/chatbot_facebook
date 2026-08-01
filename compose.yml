@@ -2,6 +2,7 @@ name: tm-ai-operations
 
 services:
   postgres:
+    restart: unless-stopped
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-tm_platform}
@@ -17,6 +18,7 @@ services:
     networks: [tm_internal]
 
   minio:
+    restart: unless-stopped
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
@@ -47,6 +49,7 @@ services:
     networks: [tm_internal]
 
   tika:
+    restart: unless-stopped
     image: apache/tika:latest-full
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://localhost:9998/version >/dev/null 2>&1 || exit 1"]
@@ -67,7 +70,12 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin@123}
       APP_ENV: ${APP_ENV:-development}
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3100}
-      DEBOUNCE_SECONDS: ${DEBOUNCE_SECONDS:-2}
+      # Dự phòng cuối cùng. Nguồn sự thật là platform.runtime_settings, ghi đè
+      # được theo channel qua channel.accounts.policy.debounceSeconds.
+      DEBOUNCE_SECONDS: ${DEBOUNCE_SECONDS:-8}
+      MODEL_TIMEOUT_MS: ${MODEL_TIMEOUT_MS:-25000}
+      WORKER_HEARTBEAT_SECONDS: ${WORKER_HEARTBEAT_SECONDS:-10}
+      WORKER_STALE_SECONDS: ${WORKER_STALE_SECONDS:-45}
       DEMO_MODE: ${DEMO_MODE:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio}
@@ -95,6 +103,7 @@ services:
     networks: [tm_internal]
 
   api:
+    restart: unless-stopped
     build:
       context: ./server
       dockerfile: Dockerfile
@@ -119,6 +128,7 @@ services:
     networks: [tm_internal]
 
   worker:
+    restart: unless-stopped
     build:
       context: ./server
       dockerfile: Dockerfile
@@ -132,14 +142,19 @@ services:
         condition: service_completed_successfully
       tika:
         condition: service_healthy
+    # File này được worker ghi lại mỗi nhịp heartbeat, không chỉ lúc khởi động,
+    # nên worker treo sẽ bị phát hiện. Trạng thái chi tiết xem
+    # GET /api/v1/health/detailed (đọc platform.worker_heartbeats).
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/tm-worker-ready"]
-      interval: 5s
-      timeout: 2s
-      retries: 30
+      test: ["CMD-SHELL", "test -f /tmp/tm-worker-ready && test $(( $(date +%s) - $(date -r /tmp/tm-worker-ready +%s) )) -lt 45"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
     networks: [tm_internal]
 
   web:
+    restart: unless-stopped
     build:
       context: ./web
       dockerfile: Dockerfile
