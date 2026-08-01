@@ -1,0 +1,169 @@
+name: tm-ai-operations
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tm_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-tm_platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tm_platform_local_only}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tm_platform} -d ${POSTGRES_DB:-tm_platform}"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [tm_internal]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-tm_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-tm_minio_local_only}
+    ports:
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - minio_data:/data
+    networks: [tm_internal]
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 ${MINIO_ACCESS_KEY:-tm_minio} ${MINIO_SECRET_KEY:-tm_minio_local_only}
+        && mc mb --ignore-existing local/${MINIO_BUCKET:-tm-knowledge}
+        && mc anonymous set none local/${MINIO_BUCKET:-tm-knowledge}
+    networks: [tm_internal]
+
+  tika:
+    image: apache/tika:latest-full
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:9998/version >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks: [tm_internal]
+
+  migrate:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    command: ["node", "dist/migrate.js"]
+    environment: &server-env
+      DATABASE_URL: ${DATABASE_URL:-postgresql://tm_platform:tm_platform_local_only@postgres:5432/tm_platform}
+      SESSION_SECRET: ${SESSION_SECRET:-tm-local-session-secret-change-me-123456}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@tm.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin@123}
+      APP_ENV: ${APP_ENV:-development}
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3100}
+      DEBOUNCE_SECONDS: ${DEBOUNCE_SECONDS:-2}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-minio}
+      MINIO_PORT: ${MINIO_PORT:-9000}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-tm_minio}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-tm_minio_local_only}
+      MINIO_BUCKET: ${MINIO_BUCKET:-tm-knowledge}
+      TIKA_URL: ${TIKA_URL:-http://tika:9998}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_VERIFY_TOKEN: ${META_VERIFY_TOKEN:-}
+      META_PAGE_ACCESS_TOKEN: ${META_PAGE_ACCESS_TOKEN:-}
+      META_PAGE_ID: ${META_PAGE_ID:-}
+      META_CHANNEL_NAME: ${META_CHANNEL_NAME:-TM Academy Messenger}
+      META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v22.0}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-}
+      PUBLIC_WEBHOOK_BASE_URL: ${PUBLIC_WEBHOOK_BASE_URL:-http://localhost:${API_PORT:-4000}}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4.1-mini}
+      OPENAI_CLASSIFIER_MODEL: ${OPENAI_CLASSIFIER_MODEL:-gpt-4o-mini}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [tm_internal]
+
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    command: ["node", "dist/index.js"]
+    environment:
+      <<: *server-env
+      PORT: 4000
+    ports:
+      - "${API_PORT:-4000}:4000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      tika:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:4000/api/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [tm_internal]
+
+  worker:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    command: ["node", "dist/worker.js"]
+    environment:
+      <<: *server-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      tika:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/tm-worker-ready"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+    networks: [tm_internal]
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-4000}/api/v1
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-4000}/api/v1
+      INTERNAL_API_URL: http://api:4000/api/v1
+    ports:
+      - "${WEB_PORT:-3100}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3000"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [tm_internal]
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  tm_internal:
+    driver: bridge

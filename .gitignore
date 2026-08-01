@@ -1,0 +1,11 @@
+.env
+.next/
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.tmp-doc-review/
+data/
+*.log
+

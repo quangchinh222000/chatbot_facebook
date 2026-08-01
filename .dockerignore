@@ -1,0 +1,11 @@
+.git
+.env
+.tmp-doc-review
+docs
+**/node_modules
+**/.next
+**/dist
+coverage
+playwright-report
+test-results
+
