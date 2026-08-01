@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { assertProductionSecrets, config } from "./config.js";
 import { closeDatabase, query } from "./db.js";
-import { recordHeartbeat, runWorkerTick, workerId } from "./worker-service.js";
+import { reclaimStuckMessages, recordHeartbeat, runWorkerTick, workerId } from "./worker-service.js";
 
 let stopping = false;
 const wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -26,6 +26,7 @@ async function main() {
 
   let consecutiveFailures = 0;
   let lastHeartbeat = 0;
+  let lastReclaim = Date.now();
 
   while (!stopping) {
     let worked = false;
@@ -51,6 +52,13 @@ async function main() {
       lastHeartbeat = now;
       await recordHeartbeat("running").catch((error) => console.error("Heartbeat failed", error));
       await writeFile("/tmp/tm-worker-ready", new Date().toISOString(), "utf8").catch(() => undefined);
+    }
+
+    // Quét tin nhắn kẹt mỗi phút — rẻ, và là lưới an toàn cho trường hợp
+    // tiến trình chết giữa các pha của processConversation.
+    if (now - lastReclaim >= 60_000) {
+      lastReclaim = now;
+      await reclaimStuckMessages().catch((error) => console.error("Reclaim failed", error));
     }
 
     if (!worked) await wait(400);

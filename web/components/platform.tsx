@@ -90,6 +90,28 @@ function Header({ eyebrow, title, description, actions }: { eyebrow?: string; ti
   return <header className="page-header"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1>{title}</h1><p>{description}</p></div>{actions && <div className="page-actions">{actions}</div>}</header>;
 }
 
+/**
+ * Chế độ vận hành thật, đọc từ API. Trước đây chỗ này là chuỗi hard-code
+ * "Local Docker stack" — không phản ánh môi trường và vi phạm yêu cầu 5.16
+ * ("người dùng luôn biết mình đang ở môi trường nào").
+ */
+const MODE_LABEL: Record<string, { text: string; tone: string }> = {
+  DEMO: { text: "DEMO · không gửi ra ngoài", tone: "amber" },
+  TEST: { text: "TEST · không gửi ra ngoài", tone: "amber" },
+  STAGING: { text: "STAGING", tone: "violet" },
+  PRODUCTION: { text: "PRODUCTION · gửi thật", tone: "red" }
+};
+
+function EnvironmentBadge() {
+  const [mode, setMode] = useState<string | null>(null);
+  useEffect(() => {
+    api<Row>("/health").then((data) => setMode(String(data.runtime_mode ?? ""))).catch(() => setMode(null));
+  }, []);
+  if (!mode) return null;
+  const info = MODE_LABEL[mode] ?? { text: mode, tone: "slate" };
+  return <div className={`environment env-${info.tone}`} title={`Chế độ vận hành: ${mode}`}><span className="env-dot" />{info.text}</div>;
+}
+
 function Login({ onLogin }: { onLogin: (user: User) => void }) {
   const [email, setEmail] = useState("admin@tm.local");
   const [password, setPassword] = useState("Admin@123");
@@ -143,7 +165,7 @@ export function Platform() {
     <aside className={cx("sidebar", mobileNav && "open")}>
       <div className="brand"><span className="brand-mark"><Sparkles size={19} /></span><span>TM Academy<small>AI Operations</small></span><button className="icon mobile-close" onClick={() => setMobileNav(false)}><X /></button></div>
       <nav>{nav.map((section) => <section key={section.label}><h3>{section.label}</h3>{section.items.map(({ href, label, icon: Icon }) => <Link onClick={() => setMobileNav(false)} className={cx("nav-link", (active === href || active.startsWith(`${href}/`) || (active === "/knowledge" && href === "/knowledge/tables")) && "active")} href={href} key={href}><Icon size={18} /><span>{label}</span></Link>)}</section>)}</nav>
-      <div className="sidebar-foot"><div className="environment"><span className="live-dot" />Local Docker stack</div><div className="user-card"><span className="avatar">{user.displayName.slice(0, 2)}</span><span><strong>{user.displayName}</strong><small>{user.roles[0] ?? "platform-admin"}</small></span><button title="Sign out" className="icon" onClick={logout}><LogOut size={17} /></button></div></div>
+      <div className="sidebar-foot"><EnvironmentBadge /><div className="user-card"><span className="avatar">{user.displayName.slice(0, 2)}</span><span><strong>{user.displayName}</strong><small>{user.roles[0] ?? "platform-admin"}</small></span><button title="Sign out" className="icon" onClick={logout}><LogOut size={17} /></button></div></div>
     </aside>
     {mobileNav && <button aria-label="Close menu" className="scrim" onClick={() => setMobileNav(false)} />}
     <main className="main"><div className="topbar"><button aria-label="Open menu" className="icon menu" onClick={() => setMobileNav(true)}><Menu /></button><div className="breadcrumb"><span>TM Academy</span><ChevronRight size={14} /><strong>{pageLabel}</strong></div><div className="top-actions"><div className={cx("connection", live && "online")}><span />{live ? "Realtime connected" : "Connecting"}</div><button className="icon" aria-label="Search"><Search size={18} /></button><button className="icon notification" aria-label="Notifications"><Bell size={18} /><i /></button></div></div>

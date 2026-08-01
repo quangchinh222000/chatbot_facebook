@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { config } from "./config.js";
-import { query, withTransaction } from "./db.js";
+import { pool, query, withTransaction } from "./db.js";
 import { detectLanguage } from "./language.js";
 import { emitEvent, enqueueJob, publishOutbox } from "./platform.js";
 import { splitMessengerText } from "./renderer.js";
@@ -121,8 +121,26 @@ async function createOutboundMessages(
   return messageIds;
 }
 
+/**
+ * Xử lý một lượt hội thoại theo BA PHA.
+ *
+ * Bản trước bọc toàn bộ trong một transaction duy nhất — nghĩa là lời gọi model
+ * (tới 25 giây) giữ luôn một connection của pool, một `pg_advisory_xact_lock`
+ * và các row lock `FOR UPDATE`. Pool chỉ có 20 connection, nên khoảng 20 hội
+ * thoại đồng thời là cạn pool và toàn bộ API đứng.
+ *
+ * Nay:
+ *   Pha 1 (tx ngắn)  — chốt batch tin nhắn, đánh dấu 'processing', đọc ngữ cảnh
+ *   Pha 2 (KHÔNG tx) — gọi model
+ *   Pha 3 (tx ngắn)  — ghi trace, đổi trạng thái, tạo outbound
+ *
+ * Chống chạy trùng không còn dựa vào advisory lock xuyên suốt mà dựa vào việc
+ * Pha 1 đã chuyển tin nhắn sang 'processing': lượt chạy song song sẽ không thấy
+ * tin 'pending' nào và thoát ngay.
+ */
 export async function processConversation(conversationId: string, correlationId: string = randomUUID()) {
-  return withTransaction(async (client) => {
+  // ---- Pha 1: chốt batch (transaction ngắn) ----
+  const claimed = await withTransaction(async (client) => {
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [conversationId]);
     const conversationResult = await client.query<{
       id: string;
@@ -181,8 +199,34 @@ export async function processConversation(conversationId: string, correlationId:
       [conversationId]
     );
 
-    const outcome = await executeTurn(
-      client,
+    for (const message of messages.rows) {
+      await client.query("UPDATE conversation.messages SET detected_language = $2 WHERE id = $1", [
+        message.id,
+        detectLanguage(message.normalized_text ?? message.raw_text ?? "")
+      ]);
+    }
+
+    return {
+      conversation,
+      messages: messages.rows,
+      messageIds,
+      text,
+      batchId,
+      cfg,
+      inboundCount: Number(history.rows[0]?.count ?? 0)
+    };
+  });
+
+  if ("status" in claimed) return claimed;
+
+  const { conversation, messageIds, text, batchId, cfg } = claimed;
+
+  // ---- Pha 2: gọi model NGOÀI transaction ----
+  // Đây là phần chậm nhất. Không giữ connection, không giữ lock.
+  let outcome: Awaited<ReturnType<typeof executeTurn>>;
+  try {
+    outcome = await executeTurn(
+      pool,
       {
         organizationId: conversation.organization_id,
         mode: "live",
@@ -194,22 +238,30 @@ export async function processConversation(conversationId: string, correlationId:
         segment: conversation.segment,
         selectedCourseId: conversation.selected_course_id,
         conversationLanguage: conversation.primary_language,
-        inboundCount: Number(history.rows[0]?.count ?? 0)
+        inboundCount: claimed.inboundCount
       },
       cfg
     );
+  } catch (error) {
+    // Trả tin nhắn về 'pending' để lượt sau xử lý lại, thay vì kẹt ở
+    // 'processing' vĩnh viễn.
+    await query(
+      "UPDATE conversation.messages SET status = 'pending', batch_id = NULL WHERE id = ANY($1::uuid[]) AND status = 'processing'",
+      [messageIds]
+    );
+    await query("UPDATE conversation.message_batches SET status = 'failed' WHERE id = $1", [batchId]);
+    throw error;
+  }
+
+  // ---- Pha 3: ghi kết quả (transaction ngắn) ----
+  return withTransaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [conversationId]);
 
     // Chốt ngôn ngữ chính của hội thoại sau lượt đầu tiên nhận diện được.
     if (!conversation.primary_language && outcome.language.detected !== "unknown") {
       await client.query("UPDATE conversation.conversations SET primary_language = $2 WHERE id = $1", [
         conversationId,
         outcome.language.language
-      ]);
-    }
-    for (const message of messages.rows) {
-      await client.query("UPDATE conversation.messages SET detected_language = $2 WHERE id = $1", [
-        message.id,
-        detectLanguage(message.normalized_text ?? message.raw_text ?? "")
       ]);
     }
 

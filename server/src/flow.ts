@@ -1,4 +1,4 @@
-import type { PoolClient } from "pg";
+import type { DatabaseExecutor } from "./types.js";
 import { z } from "zod";
 
 export const runtimeStages = ["ICE_BREAK", "QUALIFICATION", "QNA_COURSE", "QNA_PRICE", "HUMAN"] as const;
@@ -45,9 +45,9 @@ const fallbackPromptCodes: Record<string, string> = {
   HUMAN: "handover-summary"
 };
 
-export async function resolveRuntimeFlow(client: PoolClient, organizationId: string, release: any) {
+export async function resolveRuntimeFlow(db: DatabaseExecutor, organizationId: string, release: any) {
   const pinnedId = release?.manifest?.flowVersionId ?? null;
-  const result = await client.query<{
+  const result = await db.query<{
     id: string; version_no: number; graph: FlowGraph; code: string; name: string;
   }>(
     `SELECT fv.id,fv.version_no,fv.graph,f.code,f.name

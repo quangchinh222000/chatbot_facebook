@@ -10,7 +10,7 @@
  * Xem docs/AUDIT-2026-08.md mục 1.1.
  */
 
-import type { PoolClient } from "pg";
+import type { DatabaseExecutor } from "./types.js";
 import { config } from "./config.js";
 import { promptCodeForStage, resolveRuntimeFlow } from "./flow.js";
 import { validateGroundedResponse, type GuardrailResult } from "./guardrail.js";
@@ -121,11 +121,11 @@ export interface TurnOutcome {
 // ---------------------------------------------------------------------------
 
 export async function loadLanguagePolicy(
-  client: PoolClient,
+  db: DatabaseExecutor,
   organizationId: string,
   options: { channelPolicy?: Record<string, any> | null; release?: ReleaseRow | null } = {}
 ): Promise<LanguagePolicy> {
-  const settings = await client.query<{
+  const settings = await db.query<{
     default_language: string;
     supported_languages: string[];
     language_mode: "follow_customer" | "force_default";
@@ -145,7 +145,7 @@ export async function loadLanguagePolicy(
 }
 
 export async function resolveRuntimeConfig(
-  client: PoolClient,
+  db: DatabaseExecutor,
   input: {
     organizationId: string;
     environment: Environment;
@@ -156,13 +156,13 @@ export async function resolveRuntimeConfig(
   const releaseEnvironment = releaseEnvironmentFor(input.environment);
   const release = input.releaseId
     ? (
-        await client.query<ReleaseRow>(
+        await db.query<ReleaseRow>(
           "SELECT id, release_code, status, environment, manifest FROM studio.releases WHERE id = $1 AND organization_id = $2",
           [input.releaseId, input.organizationId]
         )
       ).rows[0] ?? null
     : (
-        await client.query<ReleaseRow>(
+        await db.query<ReleaseRow>(
           `SELECT id, release_code, status, environment, manifest FROM studio.releases
            WHERE organization_id = $1 AND environment = $2 AND status IN ('active','canary')
            ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, activated_at DESC NULLS LAST
@@ -173,14 +173,14 @@ export async function resolveRuntimeConfig(
 
   const channel = input.channelAccountId
     ? (
-        await client.query<{ policy: Record<string, any> }>(
+        await db.query<{ policy: Record<string, any> }>(
           "SELECT policy FROM channel.accounts WHERE id = $1",
           [input.channelAccountId]
         )
       ).rows[0] ?? null
     : null;
 
-  const settings = await client.query<{ debounce_seconds: number }>(
+  const settings = await db.query<{ debounce_seconds: number }>(
     "SELECT debounce_seconds FROM platform.runtime_settings WHERE organization_id = $1",
     [input.organizationId]
   );
@@ -194,22 +194,22 @@ export async function resolveRuntimeConfig(
     organizationId: input.organizationId,
     environment: input.environment,
     release,
-    languagePolicy: await loadLanguagePolicy(client, input.organizationId, { channelPolicy: channel?.policy, release }),
+    languagePolicy: await loadLanguagePolicy(db, input.organizationId, { channelPolicy: channel?.policy, release }),
     debounceSeconds,
     ruleVersionId: release?.manifest?.ruleVersionId ?? null
   };
 }
 
 async function resolveRuntimePrompt(
-  client: PoolClient,
+  db: DatabaseExecutor,
   organizationId: string,
   stage: string,
   release: ReleaseRow | null
 ): Promise<RuntimePrompt> {
-  const flow = await resolveRuntimeFlow(client, organizationId, release);
+  const flow = await resolveRuntimeFlow(db, organizationId, release);
   const code = promptCodeForStage(flow, stage);
   const pinnedId = release?.manifest?.promptVersionIds?.[code] ?? release?.manifest?.prompts?.[code] ?? null;
-  const result = await client.query<{
+  const result = await db.query<{
     id: string; system_template: string; user_template: string | null; allowed_tools: string[];
     model_profile_code: string | null; model: string | null; parameters: Record<string, unknown> | null;
   }>(
@@ -438,7 +438,7 @@ export function requiredToolForStage(stage: string) {
  *   -> retrieval -> prompt -> model -> grounding -> render
  */
 export async function executeTurn(
-  client: PoolClient,
+  db: DatabaseExecutor,
   ctx: TurnContext,
   cfg: RuntimeConfig
 ): Promise<TurnOutcome> {
@@ -470,7 +470,7 @@ export async function executeTurn(
 
   // Hội thoại đang do người thật giữ: dừng ngay, không sinh nội dung.
   if (decision.route === "stop") {
-    const prompt = await resolveRuntimePrompt(client, ctx.organizationId, decision.stage, cfg.release);
+    const prompt = await resolveRuntimePrompt(db, ctx.organizationId, decision.stage, cfg.release);
     return {
       decision,
       language,
@@ -550,7 +550,7 @@ export async function executeTurn(
     knowledge,
     language: language.language
   });
-  const prompt = await resolveRuntimePrompt(client, ctx.organizationId, decision.stage, cfg.release);
+  const prompt = await resolveRuntimePrompt(db, ctx.organizationId, decision.stage, cfg.release);
   const toolPolicyValid = !requiredTool || prompt.allowedTools.includes(requiredTool);
   const protectedTerms = course?.course?.name ? [course.course.name] : [];
 
@@ -619,7 +619,7 @@ function snapshotConfig(cfg: RuntimeConfig, prompt: RuntimePrompt, language: Lan
 // ---------------------------------------------------------------------------
 
 export async function recordAiRun(
-  client: PoolClient,
+  db: DatabaseExecutor,
   input: {
     organizationId: string;
     conversationId?: string | null;
@@ -635,7 +635,7 @@ export async function recordAiRun(
   }
 ) {
   const { outcome } = input;
-  const run = await client.query<{ id: string }>(
+  const run = await db.query<{ id: string }>(
     `INSERT INTO platform.ai_runs(
        organization_id, conversation_id, batch_id, release_id, purpose, provider, model,
        input, output, decision, validation, prompt_version_ids, rule_version_id,
@@ -687,14 +687,14 @@ export async function recordAiRun(
   const aiRunId = run.rows[0]!.id;
 
   for (const call of outcome.toolCalls) {
-    await client.query(
+    await db.query(
       `INSERT INTO platform.ai_tool_calls(ai_run_id, tool_code, input, output, status, latency_ms)
        VALUES ($1,$2,$3,$4,$5,$6)`,
       [aiRunId, call.toolCode, JSON.stringify(call.input), JSON.stringify(call.output), call.status, call.latencyMs]
     );
   }
   if (outcome.knowledge.length) {
-    await client.query(
+    await db.query(
       `INSERT INTO platform.retrieval_snapshots(ai_run_id, query, candidates, selected_chunk_ids)
        VALUES ($1,$2,$3,$4)`,
       [

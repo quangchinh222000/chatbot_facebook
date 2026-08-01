@@ -303,6 +303,41 @@ async function requeueConversationIfPending(job: ClaimedJob) {
   });
 }
 
+/**
+ * Thu hồi tin nhắn kẹt ở 'processing'.
+ *
+ * processConversation chia làm ba pha, nên nếu tiến trình chết giữa pha 2 (gọi
+ * model) và pha 3, tin nhắn sẽ nằm mãi ở 'processing' và không ai xử lý. Đưa
+ * chúng về 'pending' rồi xếp lại hàng đợi.
+ */
+export async function reclaimStuckMessages(olderThanSeconds = 300) {
+  const stuck = await query<{ conversation_id: string; organization_id: string }>(
+    `UPDATE conversation.messages m
+     SET status = 'pending', batch_id = NULL
+     FROM conversation.conversations c
+     WHERE c.id = m.conversation_id
+       AND m.direction = 'inbound' AND m.status = 'processing'
+       AND m.created_at < now() - make_interval(secs => $1)
+     RETURNING DISTINCT m.conversation_id, m.organization_id`,
+    [olderThanSeconds]
+  );
+  for (const row of stuck.rows) {
+    await withTransaction((client) =>
+      enqueueJob(
+        client,
+        row.organization_id,
+        "PROCESS_CONVERSATION",
+        { conversationId: row.conversation_id, correlationId: randomUUID() },
+        `process-conversation:${row.conversation_id}`,
+        new Date(),
+        50
+      )
+    );
+  }
+  if (stuck.rowCount) console.warn(`Đã thu hồi tin nhắn kẹt của ${stuck.rowCount} hội thoại`);
+  return stuck.rowCount ?? 0;
+}
+
 export async function recordHeartbeat(status: "starting" | "running" | "draining" | "stopped" = "running", lastError?: string) {
   await query(
     `INSERT INTO platform.worker_heartbeats(worker_id, hostname, pid, app_env, status, jobs_processed, last_error)
