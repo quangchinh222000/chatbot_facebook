@@ -29,8 +29,12 @@ Open [http://localhost:3100](http://localhost:3100) and sign in with the local a
 
 Use the web UI rather than modifying the source files:
 
-1. Open **Knowledge → Structured Data → Course Catalog** and import `docs/TM - Fact - Khóa học.csv`.
-2. Open **Pricing Rules** and import `docs/TM - Fact - Học phí.csv`.
+1. Open **Knowledge → Structured Data → Course Catalog** and import the course fact CSV.
+2. Open **Pricing Rules** and import the tuition fact CSV.
+
+> The fact CSVs and the internal design documents live in `docs/`, which is kept
+> out of this repository on purpose — they contain real course and tuition data.
+> Ask the team for a copy before running the import.
 3. Review the import summary, then use the edit/archive controls to maintain individual records.
 
 The importer supports quoted multiline fields, validates the complete file before writing, skips blank or duplicate rows, and upserts stable records when a file is imported again.
