@@ -135,6 +135,10 @@ export async function registerStudioRoutes(app: FastifyInstance) {
           [documentId, body.content, contentHash(body.content), user.id]
         );
         revisionId = revision.rows[0]!.id;
+        // Nhúng ngay khi tạo, giống lúc tạo revision mới. Thiếu dòng này thì
+        // tài liệu người dùng vừa thêm không có chunk nào và AI không đọc được
+        // — đúng thứ mà kỳ vọng "thêm tài liệu là AI hiểu luôn" cần.
+        await queueDocumentIndex(client, user.organizationId, revisionId);
       }
       await writeAudit(client, user, "knowledge.document.created", "knowledge_document", documentId, null, body, request.correlationId, request.ip);
       return { documentId, revisionId, status: body.sourceType === "url" ? "parsing" : "draft" };
