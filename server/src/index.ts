@@ -11,6 +11,7 @@ import { createHttpError, requestCorrelationId } from "./http.js";
 import { registerCoreRoutes } from "./routes-core.js";
 import { registerStudioRoutes } from "./routes-studio.js";
 import { registerStructuredRoutes } from "./routes-structured.js";
+import { registerPlatformRoutes } from "./routes-platform.js";
 
 export function createApp() {
   const app = Fastify({
@@ -80,6 +81,7 @@ export function createApp() {
   app.register(registerCoreRoutes);
   app.register(registerStructuredRoutes);
   app.register(registerStudioRoutes);
+  app.register(registerPlatformRoutes);
   return app;
 }
 

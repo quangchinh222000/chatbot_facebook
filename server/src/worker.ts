@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { assertProductionSecrets, config } from "./config.js";
 import { closeDatabase, query } from "./db.js";
 import { reclaimStuckMessages, recordHeartbeat, runWorkerTick, workerId } from "./worker-service.js";
+import { tickSchedules } from "./scheduler.js";
 
 let stopping = false;
 const wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -27,6 +28,7 @@ async function main() {
   let consecutiveFailures = 0;
   let lastHeartbeat = 0;
   let lastReclaim = Date.now();
+  let lastSchedule = 0;
 
   while (!stopping) {
     let worked = false;
@@ -59,6 +61,16 @@ async function main() {
     if (now - lastReclaim >= 60_000) {
       lastReclaim = now;
       await reclaimStuckMessages().catch((error) => console.error("Reclaim failed", error));
+    }
+
+    // Quét lịch định kỳ mỗi 30 giây. Cron nhỏ nhất là phút nên thế là đủ.
+    if (now - lastSchedule >= 30_000) {
+      lastSchedule = now;
+      const queued = await tickSchedules().catch((error) => {
+        console.error("Scheduler failed", error);
+        return 0;
+      });
+      if (queued) console.log(`Scheduler đẩy ${queued} job theo lịch`);
     }
 
     if (!worked) await wait(400);

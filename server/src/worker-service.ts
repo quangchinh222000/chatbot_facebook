@@ -4,6 +4,7 @@ import type { PoolClient } from "pg";
 import { config } from "./config.js";
 import { query, withTransaction } from "./db.js";
 import { runEvaluation } from "./evaluation.js";
+import { reviewConversations } from "./improvement.js";
 import { indexDocumentRevision, parseDocument } from "./knowledge.js";
 import { emitEvent, enqueueJob } from "./platform.js";
 import { normalizeWebhookEvent, processConversation } from "./orchestrator.js";
@@ -99,6 +100,12 @@ async function executeJob(job: ClaimedJob) {
       return parseDocument(String(job.payload.documentId), correlationId);
     case "RUN_EVALUATION":
       return runEvaluation(String(job.payload.runId), correlationId);
+    case "REVIEW_CONVERSATIONS":
+      return reviewConversations(job.organization_id, {
+        lookbackDays: Number(job.payload.lookbackDays ?? 7),
+        minSignals: Number(job.payload.minSignals ?? 3),
+        correlationId
+      });
     default:
       throw new Error(`Unknown job type ${job.job_type}`);
   }
