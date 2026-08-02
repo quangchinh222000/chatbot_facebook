@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 import { Client as MinioClient } from "minio";
 import type { PoolClient } from "pg";
 import { config } from "./config.js";
+import { activeProfile as embeddingProfile, embedOne, embedTexts, vectorLiteral as toVectorLiteral } from "./embedding.js";
 import { query, withTransaction } from "./db.js";
 import { enqueueJob, emitEvent } from "./platform.js";
 import type { CourseMatch } from "./types.js";
@@ -16,22 +17,9 @@ export const minio = new MinioClient({
   secretKey: config.MINIO_SECRET_KEY
 });
 
-export function localEmbedding(text: string, dimensions = 64) {
-  const vector = Array.from({ length: dimensions }, () => 0);
-  const tokens = text.normalize("NFKC").toLocaleLowerCase("vi-VN").match(/[\p{L}\p{N}]+/gu) ?? [];
-  for (const token of tokens) {
-    const digest = createHash("sha256").update(token).digest();
-    const index = digest.readUInt16BE(0) % dimensions;
-    const sign = digest[2]! % 2 === 0 ? 1 : -1;
-    vector[index] = (vector[index] ?? 0) + sign * (1 + (digest[3]! / 255));
-  }
-  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
-  return vector.map((value) => Number((value / norm).toFixed(8)));
-}
-
-export function vectorLiteral(vector: number[]) {
-  return `[${vector.join(",")}]`;
-}
+// localEmbedding và vectorLiteral chuyển sang embedding.ts.
+// Re-export để nơi khác không phải sửa đường dẫn import.
+export { localEmbedding, vectorLiteral, activeProfile } from "./embedding.js";
 
 export function chunkText(content: string, target = 900, max = 1400, overlap = 120) {
   const normalized = content.normalize("NFKC").replace(/\r\n?/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -140,7 +128,16 @@ export async function getPricingQuote(courseId: string, audience = "Working prof
 }
 
 export async function searchKnowledge(organizationId: string, searchText: string, topK = 5) {
-  const embedding = vectorLiteral(localEmbedding(searchText));
+  // Nhúng câu hỏi bằng CÙNG hồ sơ đã nhúng tài liệu. Nếu provider lỗi thì vẫn
+  // truy hồi được bằng full-text, chỉ mất phần ngữ nghĩa — tốt hơn là ném lỗi
+  // giữa cuộc hội thoại.
+  let embedding: string | null = null;
+  try {
+    const { vector } = await embedOne(searchText);
+    embedding = toVectorLiteral(vector);
+  } catch (error) {
+    console.error("Không nhúng được câu truy vấn, lùi về full-text:", error instanceof Error ? error.message : error);
+  }
   const result = await query<{
     id: string;
     content: string;
@@ -152,10 +149,16 @@ export async function searchKnowledge(organizationId: string, searchText: string
     score: number;
   }>(
     `SELECT c.id, c.content, c.heading_path, c.document_revision_id, d.title AS document_title,
-            COALESCE(1 - (c.embedding <=> $2::vector), 0)::float AS vector_score,
+            CASE WHEN $2::text IS NULL OR c.embedding IS NULL THEN 0
+                 ELSE (1 - (c.embedding <=> $2::vector)) END::float AS vector_score,
             ts_rank(to_tsvector('simple', c.content), plainto_tsquery('simple', $3))::float AS fts_score,
-            (0.55 * COALESCE(1 - (c.embedding <=> $2::vector), 0)
-             + 0.45 * ts_rank(to_tsvector('simple', c.content), plainto_tsquery('simple', $3)))::float AS score
+            -- Chưa nhúng được câu hỏi thì dồn toàn bộ trọng số sang full-text
+            -- thay vì trả điểm 0 cho mọi chunk.
+            (CASE WHEN $2::text IS NULL OR c.embedding IS NULL
+                  THEN ts_rank(to_tsvector('simple', c.content), plainto_tsquery('simple', $3))
+                  ELSE 0.55 * (1 - (c.embedding <=> $2::vector))
+                     + 0.45 * ts_rank(to_tsvector('simple', c.content), plainto_tsquery('simple', $3))
+             END)::float AS score
      FROM knowledge.chunks c
      JOIN knowledge.document_revisions r ON r.id = c.document_revision_id
      JOIN knowledge.documents d ON d.id = r.document_id
@@ -200,15 +203,35 @@ export async function indexDocumentRevision(revisionId: string, correlationId: s
     await client.query("UPDATE knowledge.document_revisions SET status = 'indexing' WHERE id = $1", [revisionId]);
     await client.query("DELETE FROM knowledge.chunks WHERE document_revision_id = $1", [revisionId]);
     const chunks = chunkText(row.clean_content, row.target_chars, row.max_chars, row.overlap_chars);
+
+    // Nhúng NGOÀI transaction: gọi mạng theo lô có thể mất hàng chục giây, giữ
+    // connection suốt thời gian đó là cạn pool — cùng bài học với lời gọi model.
+    const profile = embeddingProfile();
+    const { vectors, failures } = await embedTexts(chunks, profile);
+    const failedIndexes = new Set(failures.map((item) => item.index));
+
     for (const [index, content] of chunks.entries()) {
-      const embedding = vectorLiteral(localEmbedding(content));
+      const vector = vectors[index];
+      const embedded = Boolean(vector?.length) && !failedIndexes.has(index);
       await client.query(
         `INSERT INTO knowledge.chunks(
-           organization_id, document_revision_id, chunk_profile_id, chunk_index, content, embedding, metadata
-         ) VALUES ($1,$2,$3,$4,$5,$6::vector,$7)`,
-        [row.organization_id, revisionId, row.profile_id, index, content, embedding, JSON.stringify({ token_estimate: Math.ceil(content.length / 4) })]
+           organization_id, document_revision_id, chunk_profile_id, chunk_index, content,
+           embedding, embedding_model, embedding_status, embedding_error, embedded_at,
+           token_estimate, metadata
+         ) VALUES ($1,$2,$3,$4,$5,$6::vector,$7,$8,$9,$10,$11,$12)`,
+        [
+          row.organization_id, revisionId, row.profile_id, index, content,
+          embedded ? toVectorLiteral(vector!) : null,
+          embedded ? profile.code : null,
+          embedded ? "embedded" : "failed",
+          embedded ? null : failures.find((item) => item.index === index)?.error ?? "Không nhúng được",
+          embedded ? new Date() : null,
+          Math.ceil(content.length / 4),
+          JSON.stringify({ token_estimate: Math.ceil(content.length / 4), embedding_profile: profile.code })
+        ]
       );
     }
+
     // Giữ nguyên trạng thái publish. Bản trước luôn ghi 'ready', nên hành động
     // publish của người dùng bị chính job index xoá mất ngay sau đó.
     const indexedStatus = row.revision_status === "published" ? "published" : "ready";
@@ -222,8 +245,14 @@ export async function indexDocumentRevision(revisionId: string, correlationId: s
       organizationId: row.organization_id,
       correlationId,
       aggregate: { type: "document_revision", id: revisionId },
-      payload: { documentId: row.document_id, revisionId, chunkCount: chunks.length }
+      payload: {
+        documentId: row.document_id, revisionId, chunkCount: chunks.length,
+        embeddingProfile: profile.code, failedChunks: failures.length
+      }
     });
+    if (failures.length) {
+      console.error(`Revision ${revisionId}: ${failures.length}/${chunks.length} đoạn chưa nhúng được`);
+    }
     return { revisionId, chunkCount: chunks.length };
   });
 }

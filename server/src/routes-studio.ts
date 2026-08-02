@@ -227,7 +227,20 @@ export async function registerStudioRoutes(app: FastifyInstance) {
       [id, user.organizationId, body.content, contentHash(body.content), JSON.stringify({ changeReason: body.changeReason }), user.id]
     );
     if (!result.rowCount) throw createHttpError(404, "DOCUMENT_NOT_FOUND", "Document not found.");
-    return sendData(request, reply, result.rows[0], 201);
+    const revision = result.rows[0] as { id: string };
+
+    /**
+     * Tự động nhúng ngay khi lưu, không đợi publish.
+     *
+     * Kỳ vọng nghiệp vụ: "sửa tài liệu trong này thì tự động embedding cho AI
+     * đọc". Bản trước chỉ nhúng khi chuyển sang approved/published, nên người
+     * viết không thấy được tài liệu của mình truy hồi ra sao trước khi duyệt.
+     *
+     * Runtime vẫn chỉ đọc revision đã publish — nhúng sớm là để xem thử và
+     * chạy retrieval test, không phải để phát hành.
+     */
+    await withTransaction((client) => queueDocumentIndex(client, user.organizationId, revision.id));
+    return sendData(request, reply, revision, 201);
   });
 
   app.post("/api/v1/knowledge/revisions/:id/transition", async (request, reply) => {

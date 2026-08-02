@@ -479,3 +479,213 @@ Sắp lại so với Phần I, ưu tiên theo chỗ đang chặn:
 
 Bước 1–2 là hai nút thắt lớn nhất. Làm xong hai bước đó thì Module 1 chạy được
 thật, và cả ba module mới có nền để mở cho đội sale.
+
+---
+
+# Phần III — Kiến trúc thông tin và kế hoạch tới production
+
+Viết sau khi có 9 màn thiết kế kỳ vọng. Chúng cho thấy khoảng cách lớn nhất
+không nằm ở tính năng mà ở **kiến trúc thông tin**: hệ thống đang bày ra bảng
+dữ liệu, không bày ra công việc người dùng cần làm.
+
+## 15. Đơn giản hoá điều hướng
+
+| Trước | Sau |
+|---|---|
+| 13 mục, 5 nhóm, tiếng Anh | **9 mục phẳng, tiếng Việt** |
+
+```
+Tổng quan · Hộp thư test · Tài liệu · Prompt · Luồng Agent
+Dữ liệu · Đánh giá · Release · Cài đặt
+```
+
+Gộp lại:
+
+| Mục cũ | Về đâu | Lý do |
+|---|---|---|
+| Conversations + Handover Cases + Customers | **Hộp thư test** | Cùng một việc: xem và can thiệp hội thoại |
+| Prompts + Rules | **Prompt** | Rule là một loại ràng buộc của prompt, không phải module riêng |
+| Conversation Flow | **Luồng Agent** | Đúng tên gọi sản phẩm |
+| Structured Data | **Dữ liệu** | Ngắn, người nghiệp vụ hiểu ngay |
+| Integrations + Jobs & Runtime | **Cài đặt** | Việc quản trị, không phải việc hằng ngày |
+
+Bỏ tiêu đề nhóm (OVERVIEW/OPERATIONS/…). Với 9 mục thì nhóm chỉ tốn chiều cao
+và thêm một tầng phải đọc.
+
+## 16. Đặc tả từng màn theo thiết kế
+
+### 16.1. Tài liệu — thư viện
+
+Cột: Tài liệu · Nguồn · Loại · Revision · **Chunks** · Trạng thái · Cập nhật.
+Bốn thẻ số: Tổng · Đang review · Đã publish · **Cần re-embed**.
+Panel phải: **Nguồn tri thức đang dùng** (collection + số tài liệu + trạng thái
+embed) và vùng kéo thả file.
+
+Điểm quan trọng: cột `Chunks` và thẻ `Cần re-embed` biến embedding từ thứ vô
+hình thành thứ người dùng thấy và kiểm soát được.
+
+### 16.2. Tài liệu — review trước embedding
+
+Ba cột: cây heading · trình soạn thảo · nhận xét.
+Panel phải: **Thiết lập embedding** (chunk profile, collection, tags, hiệu lực
+từ ngày) · **Checklist trước publish** · ước tính token.
+
+Đây là màn giải quyết đúng vấn đề "tài liệu crawl về phân mảnh, chưa thống
+nhất": sửa sạch trước khi cho AI đọc.
+
+### 16.3. Tài liệu — chunk preview và retrieval test
+
+Trái: danh sách chunk có `Selected` / `Needs split`.
+Giữa: chạy thử câu hỏi, xem Top 5 kết quả kèm điểm và đoạn trích.
+Phải: lịch sử test + **cảnh báo chất lượng** (chunk điểm thấp, quá dài, trùng lặp).
+
+Chỉ số: Recall@5 · điểm trung bình · tỷ lệ trùng lặp · token sử dụng.
+Không có màn này thì người thêm tài liệu không biết mình làm tốt hay không.
+
+### 16.4. Prompt — thư viện và chỉnh sửa
+
+Thư viện: bảng prompt + panel **Prompt bundle đang dùng** (release nào đang
+chạy version nào).
+Chỉnh sửa: tab Hệ thống / User template / Allowed tools / Variables ·
+timeline version · **Test nhanh so sánh Draft với Active cạnh nhau** · diff.
+
+So sánh cạnh nhau là điểm mấu chốt: người sửa prompt thấy ngay mình làm tốt
+hơn hay tệ đi.
+
+### 16.5. Prompt — đề xuất tối ưu (Module 2)
+
+Bảng case: Chủ đề · Phát hiện · Prompt liên quan · Mức độ ảnh hưởng · Trạng thái.
+Chi tiết 6 bước: Hội thoại gốc → Phản hồi hiện tại → Phân tích vấn đề →
+**Đề xuất patch** → Cải thiện kỳ vọng → Hành động (Duyệt / Sửa thêm / Từ chối).
+Panel phải: số case đã phân tích · đề xuất ưu tiên cao · tỷ lệ duyệt · tác động ước tính.
+
+Ghi rõ trên giao diện: *AI chỉ đề xuất, con người duyệt trước khi áp dụng.*
+
+### 16.6. Luồng Agent — chi tiết agent
+
+Cấu hình theo khối: Mô tả vai trò · System instruction · **Điều kiện kích hoạt**
+· **Công cụ được phép** · **Liên kết dataset bắt buộc** · **Quy tắc chuyển tuyến**
+· Schema đầu ra · **Guardrails** · Model.
+Panel phải: test nhanh + hiệu suất 7 ngày.
+
+"Liên kết dataset bắt buộc" chính là cơ chế ép số liệu đến từ bảng, không từ
+suy đoán.
+
+### 16.7. Luồng Agent — trình xây luồng
+
+Canvas kéo thả. Palette: Inbox · Agent · Điều kiện · Hành động · Human Handoff ·
+Kết thúc. Panel phải là thuộc tính node. Có **Validate flow** trước Publish.
+
+### 16.8. Hộp thư test — mô phỏng và trace
+
+Trái: khung chat. Phải: **trace từng bước đánh số** — mỗi bước ghi agent/tool
+kèm version, trạng thái, độ trễ, thông tin chính. Bước tool bung ra Input /
+Output / bản ghi đã chọn.
+Dưới: trạng thái · quyết định chuyển giao · model · tool · release đang chạy.
+Hành động: Chạy lại · So sánh release · Lưu thành test case.
+
+Đây là màn quan trọng nhất để gỡ lỗi. Bảng `platform.ai_run_steps` (migration
+016) sinh ra chính là để phục vụ màn này.
+
+## 17. Những thứ thừa cần bỏ
+
+| Thứ | Vì sao thừa | Xử lý |
+|---|---|---|
+| 5 runtime stage cứng | Đồ thị agent thay thế hoàn toàn | Bỏ sau khi engine chạy |
+| `studio.prompts` / `prompt_versions` | Đã có `agents` / `agent_versions` | Gộp, giữ view tương thích |
+| `renderer.ts` template tất định | Agent sinh câu trả lời, không phải template | Chỉ giữ cho fallback |
+| `requiredToolForStage()` | Tool cấp ở agent | Bỏ |
+| `studio.datasets` / `dataset_versions` | Chưa bao giờ dùng, trùng `knowledge.tables` | Bỏ hoặc gộp |
+| `004_english_workspace_content.sql` | Chuyển seed sang tiếng Anh, ngược hướng | Migration mới ghi đè về tiếng Việt |
+| Hai lớp CSS trong `globals.css` | Lớp sau ghi đè lớp trước, đã lừa tôi 2 lần | Gộp một lớp |
+| Trang Rules riêng | Là ràng buộc của prompt | Nhập vào màn Prompt |
+| Trang Customers riêng | Ít dùng, thuộc hội thoại | Nhập vào Hộp thư test |
+| Trang Jobs riêng | Việc quản trị | Nhập vào Cài đặt |
+
+## 18. Chuẩn production — không phải MVP
+
+Khác biệt giữa MVP và production nằm ở những thứ dưới đây, không ở tính năng:
+
+**Đúng đắn**
+- Embedding thật, có version, re-embed được, đo được chất lượng truy hồi
+- Số liệu luôn từ bảng có cấu trúc, có `effective_from/to`, truy nguyên tới record
+- Guardrail không tắt được, có test hồi quy chặn release
+
+**Vận hành**
+- Health check đủ thành phần · worker heartbeat · restart policy *(xong)*
+- Job có retry, backoff, dead letter *(xong)* + scheduler định kỳ *(xong schema)*
+- Không gửi nhầm ra Meta ở môi trường test *(xong)*
+- Backup và khôi phục database — **chưa có**
+- Giới hạn tần suất đăng nhập và webhook — **chưa có**
+- Log có correlation ID xuyên suốt *(xong)*
+- Cảnh báo khi hàng đợi tắc, khi tỷ lệ fallback tăng — **chưa có**
+
+**An toàn**
+- Secret không nằm trong repo *(xong)*
+- Production không khởi động khi thiếu secret *(xong)*
+- Phân quyền theo vai trò *(xong schema, chưa áp vào UI)*
+- Phiên đăng nhập thu hồi được — **chưa có**, JWT hiện không revoke được
+- Audit đầy đủ *(xong)*
+
+**Chất lượng**
+- Evaluation chạy trên pipeline thật *(xong)*
+- Bộ test case đủ 52 kịch bản — **chưa có**
+- Đo được mức độ hoàn thiện UI *(xong, `ui-review`)*
+
+## 19. Kế hoạch đầy đủ tới production
+
+Mỗi giai đoạn kết thúc là hệ thống vẫn chạy được, không có bước nào để dở dang.
+
+### Giai đoạn A — Tri thức thật sự hoạt động
+
+| # | Việc | Kết quả kiểm chứng |
+|---|---|---|
+| A1 | Embedding provider + OpenAI 1536 chiều + migration đổi vector dim | Hai câu đồng nghĩa khác từ vựng cùng truy ra một chunk |
+| A2 | Tự embed khi lưu, không đợi publish | Sửa tài liệu xong thấy chunk mới ngay |
+| A3 | Màn chunk preview + retrieval test + cảnh báo chất lượng | Recall@5 hiển thị được |
+| A4 | Re-embed toàn collection, có tiến độ | Đổi model không mất index đang chạy |
+| A5 | Release pin phạm vi thay vì nội dung | Sale publish tài liệu là bot dùng ngay |
+
+### Giai đoạn B — Prompt tự chủ và tự cải tiến
+
+| # | Việc | Kết quả kiểm chứng |
+|---|---|---|
+| B1 | Gộp prompt vào agent, bỏ bảng trùng | Một nơi duy nhất để sửa |
+| B2 | Màn sửa prompt: tab, diff, test Draft cạnh Active | So sánh được trước khi publish |
+| B3 | Bảng feedback + nút "AI trả lời sai" trên trace | Có tín hiệu để học |
+| B4 | Scheduler chạy cron trong worker | Job tuần chạy đúng giờ |
+| B5 | Agent analyst gom chủ đề từ tín hiệu 7 ngày | Ra được danh sách case |
+| B6 | Agent improver soạn patch + dẫn chứng | Đề xuất kèm `ai_run_id` |
+| B7 | Bắt buộc qua evaluation trước khi lên bàn duyệt | Đề xuất trượt tự loại |
+| B8 | Màn duyệt đề xuất 6 bước | Duyệt/từ chối trong một màn |
+
+### Giai đoạn C — Luồng đa Agent
+
+| # | Việc | Kết quả kiểm chứng |
+|---|---|---|
+| C1 | Engine thực thi đồ thị + ghi `ai_run_steps` | Chạy song song engine cũ, kết quả khớp |
+| C2 | Node preprocess: vision cho ảnh, bóc link | Ảnh biên lai chuyển human đúng |
+| C3 | Node router có điều kiện + loop guard | Rẽ nhánh đúng như n8n |
+| C4 | Memory theo scope cho từng agent | Agent nhớ đúng phạm vi |
+| C5 | Sinh tool từ bảng Dữ liệu | Tạo bảng xong AI dùng được ngay |
+| C6 | Màn chi tiết agent theo thiết kế | Cấu hình đủ 9 khối |
+| C7 | Canvas kéo thả + Validate flow | Sale tự dựng được luồng |
+| C8 | Template agent + guardrail không tắt được | Người không chuyên dùng an toàn |
+| C9 | Bỏ engine cũ và 5 stage cứng | Evaluation hai engine khớp |
+
+### Giai đoạn D — Sẵn sàng vận hành
+
+| # | Việc |
+|---|---|
+| D1 | Việt hoá toàn bộ 14 màn, gộp hai lớp CSS |
+| D2 | Màn trace theo thiết kế (bước đánh số, bung input/output) |
+| D3 | Áp phân quyền vào UI: ẩn thứ vai trò không được dùng |
+| D4 | Thu hồi phiên đăng nhập, giới hạn tần suất |
+| D5 | Backup + khôi phục database, thử khôi phục thật |
+| D6 | Cảnh báo hàng đợi tắc, tỷ lệ fallback tăng |
+| D7 | Bộ 52 test case của tài liệu nghiệp vụ |
+| D8 | Nối n8n bridge chế độ shadow, so sánh kết quả |
+| D9 | Nối Meta thật sau khi shadow ổn định |
+
+Thứ tự bắt buộc: **A1 trước tất cả.** Chưa có embedding thật thì Module 1 vô
+nghĩa, mà Module 2 và 3 đều phải đứng trên tri thức đúng.

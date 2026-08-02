@@ -4,7 +4,7 @@ import {
   Activity, AlertTriangle, ArrowLeft, BadgeDollarSign, Bell, Bot, BrainCircuit, CheckCircle2, ChevronRight,
   Circle, Clock3, Copy, Database, FileText, FlaskConical, GraduationCap, Inbox, LayoutDashboard,
   LogOut, Menu, MessageSquareText, MessagesSquare, Pencil, Plus, RefreshCw, Rocket, Scale,
-  Search, Send, ShieldCheck, Sparkles, Table2, Trash2, Upload, UserRound, Users, Webhook, Workflow, X
+  Search, Send, Settings, ShieldCheck, Sparkles, Table2, Trash2, Upload, UserRound, Users, Webhook, Workflow, X
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -17,29 +17,47 @@ type Row = Record<string, any>;
 type User = { id: string; displayName: string; email: string; permissions: string[]; roles: string[] };
 type Environment = "live" | "test";
 
+/**
+ * Điều hướng chính — 9 mục phẳng, tiếng Việt.
+ *
+ * Trước đây 13 mục chia 5 nhóm bằng tiếng Anh. Đó là bản đồ của bảng dữ liệu,
+ * không phải bản đồ công việc người dùng làm. Gộp lại theo đúng ba module mục
+ * tiêu (Tài liệu · Prompt · Luồng Agent) cộng các màn phụ trợ:
+ *
+ *   Conversations + Handover Cases + Customers  ->  Hộp thư test
+ *   Prompts + Rules                             ->  Prompt
+ *   Conversation Flow                           ->  Luồng Agent
+ *   Structured Data                             ->  Dữ liệu
+ *   Integrations + Jobs & Runtime               ->  Cài đặt
+ */
 const nav = [
-  { label: "Overview", items: [{ href: "/", label: "Dashboard", icon: LayoutDashboard }] },
-  { label: "Operations", items: [
-    { href: "/conversations", label: "Conversations", icon: MessagesSquare },
-    { href: "/cases", label: "Handover Cases", icon: Inbox },
-    { href: "/contacts", label: "Customers", icon: Users }
-  ]},
-  { label: "Knowledge", items: [
-    { href: "/knowledge/documents", label: "Documents", icon: FileText },
-    { href: "/knowledge/tables", label: "Structured Data", icon: Table2 }
-  ] },
-  { label: "AI Studio", items: [
-    { href: "/studio/flows", label: "Conversation Flow", icon: Workflow },
-    { href: "/studio/prompts", label: "Prompts", icon: Sparkles },
-    { href: "/studio/rules", label: "Rules", icon: Scale },
-    { href: "/studio/evaluations", label: "Evaluations", icon: FlaskConical },
-    { href: "/studio/releases", label: "Releases", icon: Rocket }
-  ]},
-  { label: "System", items: [
-    { href: "/system/integrations", label: "Integrations", icon: Webhook },
-    { href: "/system/jobs", label: "Jobs & Runtime", icon: Workflow }
-  ]}
+  { href: "/", label: "Tổng quan", icon: LayoutDashboard },
+  { href: "/conversations", label: "Hộp thư test", icon: MessagesSquare },
+  { href: "/knowledge/documents", label: "Tài liệu", icon: FileText },
+  { href: "/studio/prompts", label: "Prompt", icon: Sparkles },
+  { href: "/studio/flows", label: "Luồng Agent", icon: Workflow },
+  { href: "/knowledge/tables", label: "Dữ liệu", icon: Table2 },
+  { href: "/studio/evaluations", label: "Đánh giá", icon: FlaskConical },
+  { href: "/studio/releases", label: "Release", icon: Rocket },
+  { href: "/system/integrations", label: "Cài đặt", icon: Settings }
 ];
+
+/**
+ * Khớp đường dẫn hiện tại với một mục nav. Chọn mục có href dài nhất khớp được,
+ * để route con như /knowledge/tables/course-catalog sáng đúng mục "Dữ liệu".
+ */
+function matchNav(path: string) {
+  const candidates = nav.filter((item) =>
+    item.href === "/" ? path === "/" || path === "/dashboard" : path === item.href || path.startsWith(`${item.href}/`)
+  );
+  if (candidates.length) return candidates.sort((a, b) => b.href.length - a.href.length)[0];
+  // Các route cũ không còn mục riêng trên sidebar.
+  if (path === "/knowledge" || path === "/courses" || path === "/pricing") return nav.find((i) => i.href === "/knowledge/tables");
+  if (path === "/cases" || path === "/contacts") return nav.find((i) => i.href === "/conversations");
+  if (path === "/studio/rules") return nav.find((i) => i.href === "/studio/prompts");
+  if (path === "/system/jobs") return nav.find((i) => i.href === "/system/integrations");
+  return undefined;
+}
 
 function useLoad<T>(path: string | null, refresh = 0) {
   const [data, setData] = useState<T | null>(null);
@@ -160,11 +178,11 @@ export function Platform() {
   if (!user) return <Login onLogin={(value) => { setUser(value); router.push("/"); }} />;
   const active = pathname === "/login" ? "/" : pathname;
   async function logout() { await post("/auth/logout"); setUser(null); }
-  const pageLabel = nav.flatMap((section) => section.items).find((item) => active === item.href || active.startsWith(`${item.href}/`) || (active === "/knowledge" && item.href === "/knowledge/tables"))?.label ?? "Workspace";
+  const pageLabel = matchNav(active)?.label ?? "Không gian làm việc";
   return <div className="app-shell">
     <aside className={cx("sidebar", mobileNav && "open")}>
       <div className="brand"><span className="brand-mark"><Sparkles size={19} /></span><span>TM Academy<small>AI Operations</small></span><button className="icon mobile-close" onClick={() => setMobileNav(false)}><X /></button></div>
-      <nav>{nav.map((section) => <section key={section.label}><h3>{section.label}</h3>{section.items.map(({ href, label, icon: Icon }) => <Link onClick={() => setMobileNav(false)} className={cx("nav-link", (active === href || active.startsWith(`${href}/`) || (active === "/knowledge" && href === "/knowledge/tables")) && "active")} href={href} key={href}><Icon size={18} /><span>{label}</span></Link>)}</section>)}</nav>
+      <nav>{nav.map(({ href, label, icon: Icon }) => <Link onClick={() => setMobileNav(false)} className={cx("nav-link", matchNav(active)?.href === href && "active")} href={href} key={href}><Icon size={18} /><span>{label}</span></Link>)}</nav>
       <div className="sidebar-foot"><EnvironmentBadge /><div className="user-card"><span className="avatar">{user.displayName.slice(0, 2)}</span><span><strong>{user.displayName}</strong><small>{user.roles[0] ?? "platform-admin"}</small></span><button title="Sign out" className="icon" onClick={logout}><LogOut size={17} /></button></div></div>
     </aside>
     {mobileNav && <button aria-label="Close menu" className="scrim" onClick={() => setMobileNav(false)} />}
