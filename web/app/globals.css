@@ -14,8 +14,8 @@ button { cursor:pointer; }
 .brand span:last-of-type { display:flex; flex-direction:column; line-height:1.05; }
 .brand small { margin-top:5px; color:#9596a7; font:600 14px/1 Manrope,sans-serif; letter-spacing:1.6px; text-transform:uppercase; }
 .brand-mark { display:grid!important; place-items:center; width:35px; height:35px; flex:none; color:white; background:linear-gradient(140deg,#8e6cff,#5c3dd0); border-radius:10px; box-shadow:0 6px 18px #6449cc55; }
-.sidebar nav { overflow-y:auto; overflow-x:hidden; flex:1 1 auto; min-height:0; padding-top:16px; scrollbar-width:none; }
-.sidebar nav section { margin:0 0 10px; }
+.sidebar nav { overflow-y:auto; overflow-x:hidden; flex:1 1 auto; min-height:0; padding-top:8px; scrollbar-width:none; }
+.sidebar nav section { margin:0 0 4px; }
 .sidebar nav h3 { color:#6f7082; font:700 14px/1 Manrope,sans-serif; letter-spacing:1.5px; text-transform:uppercase; margin:0 12px 8px; }
 .nav-link { height:38px; border-radius:8px; padding:0 11px; display:flex; align-items:center; gap:11px; color:#9b9cab; font-size:14px; font-weight:600; margin:2px 0; transition:.16s ease; }
 .nav-link:hover { color:white; background:#ffffff08; }
@@ -149,8 +149,8 @@ html, body { font-size: 14px; line-height: 1.45; }
 .brand-mark { width: 38px; height: 38px; border-radius: 11px; }
 .sidebar nav { padding-top: 26px; }
 .sidebar nav section { margin-bottom: 22px; }
-.sidebar nav h3 { margin: 0 12px 9px; font-size: 13px; color: #777e91; }
-.nav-link { height: 42px; padding: 0 12px; gap: 12px; border-radius: 9px; font-size: 14px; color: #a9afbf; }
+.sidebar nav h3 { margin: 0 12px 3px; font-size: 12px; color: #777e91; }
+.nav-link { height: 36px; padding: 0 12px; gap: 12px; border-radius: 9px; font-size: 14px; color: #a9afbf; }
 .nav-link.active { background: #6555dd; box-shadow: 0 7px 20px rgba(79,61,190,.3); }
 .environment { font-size: 11px; }
 .user-card { padding-top: 12px; }

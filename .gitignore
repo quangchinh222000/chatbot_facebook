@@ -26,6 +26,10 @@ playwright-report/
 coverage/
 __snapshots__/
 
+# Bộ rà soát giao diện bằng Playwright.
+# Bỏ dòng này nếu muốn chia sẻ cho cả nhóm dùng chung.
+ui-review/
+
 # --- Build & phụ thuộc ---
 .next/
 node_modules/
