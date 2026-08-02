@@ -59,6 +59,40 @@ export async function registerPlatformRoutes(app: FastifyInstance) {
     return sendData(request, reply, result.rows);
   });
 
+
+  // -------------------------------------------------------------------------
+  // Trace — danh sách lượt AI và chi tiết từng bước
+  // -------------------------------------------------------------------------
+  app.get("/api/v1/traces", async (request, reply) => {
+    const user = requirePermission(request, "ai_trace.read");
+    const q = request.query as { limit?: string; mode?: string };
+    const result = await query(
+      `SELECT id, conversation_id, purpose, provider, model, status, run_mode, environment,
+              language, decision, validation, latency_ms, token_usage, runtime_config,
+              input, created_at
+       FROM platform.ai_runs
+       WHERE organization_id = $1 AND ($2::text IS NULL OR run_mode = $2)
+       ORDER BY created_at DESC LIMIT $3`,
+      [user.organizationId, q.mode ?? null, Math.min(Number(q.limit ?? 50), 200)]
+    );
+    return sendData(request, reply, result.rows);
+  });
+
+  app.get("/api/v1/traces/:id", async (request, reply) => {
+    const user = requirePermission(request, "ai_trace.read");
+    const { id } = request.params as { id: string };
+    const [run, steps, toolCalls, retrieval] = await Promise.all([
+      query("SELECT * FROM platform.ai_runs WHERE id=$1 AND organization_id=$2", [id, user.organizationId]),
+      query("SELECT * FROM platform.ai_run_steps WHERE ai_run_id=$1 ORDER BY step_index", [id]),
+      query("SELECT * FROM platform.ai_tool_calls WHERE ai_run_id=$1 ORDER BY created_at", [id]),
+      query("SELECT * FROM platform.retrieval_snapshots WHERE ai_run_id=$1", [id])
+    ]);
+    if (!run.rowCount) throw createHttpError(404, "TRACE_NOT_FOUND", "Không tìm thấy lượt AI.");
+    return sendData(request, reply, {
+      ...run.rows[0], steps: steps.rows, toolCalls: toolCalls.rows, retrieval: retrieval.rows
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Chunk preview + retrieval test
   // -------------------------------------------------------------------------

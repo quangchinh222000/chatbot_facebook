@@ -12,6 +12,7 @@ import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 
 import { api, API_URL, ApiError, patch, post, remove } from "@/lib/api";
 import { FlowStudio } from "@/components/flow-studio";
 import { StructuredWorkspace } from "@/components/structured-workspace";
+import { AgentsScreen, ChunkStudio, Proposals, SystemStatus, TraceExplorer } from "@/components/studio-screens";
 
 type Row = Record<string, any>;
 type User = { id: string; displayName: string; email: string; permissions: string[]; roles: string[] };
@@ -51,7 +52,11 @@ function matchNav(path: string) {
     item.href === "/" ? path === "/" || path === "/dashboard" : path === item.href || path.startsWith(`${item.href}/`)
   );
   if (candidates.length) return candidates.sort((a, b) => b.href.length - a.href.length)[0];
-  // Các route cũ không còn mục riêng trên sidebar.
+  // Màn con và route cũ không có mục riêng trên sidebar — quy về module cha.
+  if (path === "/knowledge/chunks") return nav.find((i) => i.href === "/knowledge/documents");
+  if (path === "/studio/proposals") return nav.find((i) => i.href === "/studio/prompts");
+  if (path === "/studio/agents") return nav.find((i) => i.href === "/studio/flows");
+  if (path === "/system/status") return nav.find((i) => i.href === "/system/integrations");
   if (path === "/knowledge" || path === "/courses" || path === "/pricing") return nav.find((i) => i.href === "/knowledge/tables");
   if (path === "/cases" || path === "/contacts") return nav.find((i) => i.href === "/conversations");
   if (path === "/studio/rules") return nav.find((i) => i.href === "/studio/prompts");
@@ -187,9 +192,48 @@ export function Platform() {
     </aside>
     {mobileNav && <button aria-label="Close menu" className="scrim" onClick={() => setMobileNav(false)} />}
     <main className="main"><div className="topbar"><button aria-label="Open menu" className="icon menu" onClick={() => setMobileNav(true)}><Menu /></button><div className="breadcrumb"><span>TM Academy</span><ChevronRight size={14} /><strong>{pageLabel}</strong></div><div className="top-actions"><div className={cx("connection", live && "online")}><span />{live ? "Realtime connected" : "Connecting"}</div></div></div>
-      <div className="content"><RouteView path={active} /></div>
+      <div className="content"><SubNav path={active} /><RouteView path={active} /></div>
     </main>
   </div>;
+}
+
+/**
+ * Điều hướng con TRONG một module. Khác với thanh tab đã gỡ trước đây: cái đó
+ * lặp lại đúng các mục của sidebar, cái này dẫn tới màn con mà sidebar không có.
+ */
+const SUB_NAV: Record<string, Array<{ href: string; label: string }>> = {
+  "/conversations": [
+    { href: "/conversations", label: "Hội thoại" },
+    { href: "/conversations/traces", label: "Trace từng bước" },
+    { href: "/cases", label: "Chuyển tư vấn viên" }
+  ],
+  "/knowledge/documents": [
+    { href: "/knowledge/documents", label: "Thư viện" },
+    { href: "/knowledge/chunks", label: "Chunk & Test truy hồi" }
+  ],
+  "/studio/prompts": [
+    { href: "/studio/prompts", label: "Thư viện Prompt" },
+    { href: "/studio/proposals", label: "Đề xuất tối ưu" },
+    { href: "/studio/rules", label: "Ràng buộc" }
+  ],
+  "/studio/flows": [
+    { href: "/studio/flows", label: "Sơ đồ luồng" },
+    { href: "/studio/agents", label: "Agent" }
+  ],
+  "/system/integrations": [
+    { href: "/system/integrations", label: "Kết nối" },
+    { href: "/system/status", label: "Tình trạng hệ thống" },
+    { href: "/system/jobs", label: "Hàng đợi" }
+  ]
+};
+
+function SubNav({ path }: { path: string }) {
+  const parent = matchNav(path)?.href;
+  const items = parent ? SUB_NAV[parent] : undefined;
+  if (!items || items.length < 2) return null;
+  return <div className="tabs">{items.map((item) => (
+    <Link key={item.href} href={item.href} className={path === item.href ? "active" : ""}>{item.label}</Link>
+  ))}</div>;
 }
 
 function RouteView({ path }: { path: string }) {
@@ -200,6 +244,11 @@ function RouteView({ path }: { path: string }) {
   if (path === "/knowledge" || path === "/knowledge/tables" || path === "/courses" || path === "/pricing") return <KnowledgeHub tableCode={path === "/pricing" ? "pricing-rules" : path === "/courses" ? "course-catalog" : undefined} />;
   if (path.startsWith("/knowledge/tables/")) return <KnowledgeHub tableCode={decodeURIComponent(path.slice("/knowledge/tables/".length))} />;
   if (path === "/knowledge/documents") return <DocumentsPage />;
+  if (path === "/knowledge/chunks") return <ChunkStudio />;
+  if (path === "/conversations/traces") return <TraceExplorer />;
+  if (path === "/studio/proposals") return <Proposals />;
+  if (path === "/studio/agents") return <AgentsScreen />;
+  if (path === "/system/status") return <SystemStatus />;
   if (path === "/studio/flows") return <FlowStudio />;
   if (path === "/studio/prompts") return <StudioPrompts />;
   if (path === "/studio/rules") return <StudioRules />;
